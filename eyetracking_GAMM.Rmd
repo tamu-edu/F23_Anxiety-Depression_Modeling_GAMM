@@ -1,0 +1,42 @@
+---
+title: "GAMM_F23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(mgcv)
+```
+
+Pipeline for GAMM
+1. Average left and right pupil dilation
+2. Lienar interpolation of blinks
+2. Median filter (baseline-correction is optional in GAMM modeling (see 1.
+van Rij J, Hendriks P, van Rijn H, Baayen RH, Wood SN. Analyzing the Time Course of Pupillometric Data. Trends in Hearing. 2019;23. doi:10.1177/2331216519832483 ))
+1. Downsample the data
+
+What is GAMM-- an extension of regression; estimates the relation between a dependent variable and a number of given predictors. Instead of forcing the relation between dependent variable and predictor to be linear, as is the case in typical linear regression, this relation is modeled as a smooth function
+
+```{r sample data}
+load(file='/Users/juanbalcazar/Downloads/pupil_S2_alignPronoun.rda')
+```
+
+## GAMM with mixed effects-- treat the participant as a variable quantity
+
+```{r GAMM model, echo=FALSE}
+model <- bam(Pupil ~ Condition + 
+               s(Time, by = Condition, k =20)
+             + s(Time, Subject, bs = 'fs', m =1)
+             +s(Time, Item = bs ='fs', m =1)
+             , data = dat, discrete = TRUE)
+#factor smooths specified with 'fs'
+#thus random smooths for Subjects and Items
+```
+
+#test for significance
+
+1. visual inspection of the model’s estimates of the differences between the conditions
+2. a model-comparison procedure
+3. inspection of the model summary statistics to determine the differences between conditions. 
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
