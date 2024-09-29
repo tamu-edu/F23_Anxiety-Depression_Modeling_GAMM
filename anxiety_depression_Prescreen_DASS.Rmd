@@ -1,0 +1,105 @@
+---
+title: "Anxiety_Depression_F32_Study"
+author: "Juan Balcazar"
+date: "9/25/2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(data.table)
+library(psych)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r read data}
+DASS_Prescreen <- 
+  #fread (file ="/Users/juanbalcazar/Downloads/Prescreen_DASS_MACLAB_ORR.csv")
+  fread(file ="/Users/juanbalcazar/Downloads/Spring24_prescreen_DASS21.csv")
+```
+
+
+```{r filter columns of interest: anxiety and depression, echo=FALSE}
+library(dplyr)
+library(tidyverse)
+
+DASS_Prescreen <- DASS_Prescreen %>%
+  select(email,Anxiety_Aware_MouthDryness, Anxiety_ExperienceBreathingDifficult,
+         Anxiety_ExperienceTrembling, Anxiety_WorriedAboutPanickingOrBeingFool,
+         Anxiety_FeltClosetoPanic, Anxiety_AwareofHeartRate, Anxiety_ScaredWithoutGoodReason, 
+         Depression_NoPositiveExperiene, Depression_Difficult_ToHaveInitiative, Depression_NothingToLookForwardTo,
+         Depression_FeltDownHearted_andBlue, Depression_UnabletoBecomeEnthusiastic,
+         Depression_FeltWasNotWorthMuchAsPerson, Depression_FeltLifeIsMeaningless)
+```
+
+```{r create composites, echo=FALSE}
+# numerical for certain columns
+DASS_Prescreen[, 2:ncol(DASS_Prescreen)] <- lapply(2:ncol(DASS_Prescreen), function(x) as.numeric(DASS_Prescreen[[x]]))
+
+#rowMeans
+DASS_Prescreen$Anxiety_Composite <- rowSums(DASS_Prescreen[,c("Anxiety_Aware_MouthDryness","Anxiety_ExperienceBreathingDifficult","Anxiety_ExperienceTrembling","Anxiety_WorriedAboutPanickingOrBeingFool", "Anxiety_FeltClosetoPanic", "Anxiety_AwareofHeartRate", "Anxiety_ScaredWithoutGoodReason")], 
+                              na.rm=TRUE)
+
+DASS_Prescreen$Depression_Composite <- rowSums(DASS_Prescreen[,c("Depression_NoPositiveExperiene","Depression_Difficult_ToHaveInitiative","Depression_NothingToLookForwardTo", "Depression_FeltDownHearted_andBlue", "Depression_UnabletoBecomeEnthusiastic", "Depression_FeltWasNotWorthMuchAsPerson", "Depression_FeltLifeIsMeaningless")], 
+                              na.rm=TRUE)
+```
+```{r create labels, echo=FALSE}
+  
+#label anxiety
+DASS_Prescreen <-DASS_Prescreen %>%
+mutate (Label_Anxiety = case_when(
+  Anxiety_Composite >= 8 & Anxiety_Composite <= 9 ~ "Anxiety_Mild", 
+  Anxiety_Composite >= 10 & Anxiety_Composite <= 14 ~ "Anxiety_Moderate", 
+  Anxiety_Composite >= 15 & Anxiety_Composite <= 19 ~ "Anxiety_Severe", 
+  Anxiety_Composite >= 20  ~ "Anxiety_ExtremeSevere",
+  TRUE ~ as.character(NA)
+)
+)
+
+#label depression
+DASS_Prescreen <-DASS_Prescreen %>%
+mutate (Label_Depression = case_when(
+  Depression_Composite >= 10 & Depression_Composite <= 13 ~ "Depression_Mild", 
+  Depression_Composite >= 14 & Depression_Composite <= 20 ~ "Depression_Moderate", 
+  Depression_Composite >= 21 & Depression_Composite <= 27 ~ "Depression_Severe", 
+  Depression_Composite >= 28 ~ "Depression_ExtremeSevere",
+  TRUE ~ as.character(NA)
+)
+)
+
+```
+
+```{r determine condition, echo=FALSE}
+# at least moderate in either or moderate or greater in both
+#all valid cases
+DASS_Prescreen <-
+  mutate(DASS_Prescreen,
+         ValidCondition = case_when(        #anxiety combination of valid cases
+           str_detect(Label_Anxiety, "Moderate") & str_detect(Label_Depression, "Moderate") ~ "Valid", 
+           str_detect(Label_Anxiety, "Moderate") & str_detect(Label_Depression, "Mild") ~ "Valid", 
+           str_detect(Label_Anxiety, "Moderate") & str_detect(Label_Depression, "Severe") ~ "Valid", 
+           str_detect(Label_Anxiety, "Moderate") & str_detect(Label_Depression, "Extreme") ~ "Valid", 
+                                          #depression combination of valid cases 
+           str_detect(Label_Anxiety, "Mild") & str_detect(Label_Depression, "Moderate") ~ "Valid", 
+           str_detect(Label_Anxiety, "Severe") & str_detect(Label_Depression, "Moderate") ~ "Valid", 
+           str_detect(Label_Anxiety, "Extreme") & str_detect(Label_Depression, "Moderate") ~ "Valid", 
+           TRUE  ~ as.character(NA)
+         ) )
+
+count_Valid<-
+  dplyr::count (DASS_Prescreen, ValidCondition)
+
+#filter only valid
+DASS_Prescreen <- DASS_Prescreen %>% 
+  filter(ValidCondition ==c("Valid"))
+
+
+#save dataset
+fwrite(DASS_Prescreen, "/Users/juanbalcazar/Downloads/Spring2024_Parsed_Prescreen_DASS_MACLAB_ORR.csv")
+```

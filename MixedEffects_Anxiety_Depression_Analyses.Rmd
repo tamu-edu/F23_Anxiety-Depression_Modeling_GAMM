@@ -1,0 +1,507 @@
+---
+title: "Anxiety Depression Analyses"
+author: "Juan Balcazar"
+date: "11/7/2023"
+output: html_document
+---
+
+```{r library, include=FALSE}
+library(dplyr)
+library(data.table)
+library(ggplot2)
+library(tidyverse)
+library(brms)
+library(car)
+library(tidyverse)
+library(brms)
+library(datarium)
+library(ggplot2)
+library(dplyr)
+library(ez)
+library(pander)
+library(knitr)
+library(lme4)
+```
+
+
+```{r pre-processing script, include=FALSE}
+setwd("/Users/juanbalcazar/Library/CloudStorage/GoogleDrive-balc557@tamu.edu/Shared drives/VTSRewardExpectancy/data/vts_reward_mood_f23_pilot")
+#read in file
+filelist<-list.files(pattern="*csv")
+
+fulldata <- data.frame()
+for (file in filelist) {
+  rawdata <- fread(file)    #added block
+  data <- rawdata %>% select(participant, acc, E1, trialNum, blocks.thisRepN, blocks.thisN, trialNum_cumul, curr_leftStim, curr_rightStim,
+                             alt, task, condition, target_resp.keys,
+                             target_resp.rt, rewCond, points_trial, points_cumul,) 
+  data$rewCond <-as.character(data$rewCond)
+  data$RT <- as.numeric(data$target_resp.rt)
+  data$RT <- data$RT * 1000 # convert from sec to ms  
+  data$trial <- as.numeric(data$trialNum)
+  data <- data %>% filter(!is.na(RT))
+
+  # deterministic reward transition (EEG_ET)
+  # rewCond 1 is no reward
+  #rewCond 2 is low reward (response contingent)
+  #rewCond 3 is high reward
+  data$rewTrans=NA
+  data <- data %>% 
+    mutate(rewTrans = ifelse(trial>0 & rewCond=="Lo" & lag(rewCond)=="Lo", "remainLo",
+                             ifelse(trial>0 & rewCond=="Hi" & lag(rewCond)=="Hi","remainHi", 
+                                    ifelse(trial>0 & rewCond=="Hi" & lag(rewCond)=="Lo","increase",
+                                           ifelse(trial>0 & rewCond=="Lo" & lag(rewCond)=="Hi","decrease",NA)))))
+
+data$participant <- as.character(data$participant)  
+#macmini home  
+filename=sprintf("/Users/juanbalcazar/Library/CloudStorage/GoogleDrive-balc557@tamu.edu/Shared drives/VTSRewardExpectancy/data/vts_reward_mood_f23_pilot/parsed_data/%s_vts_reward_mood_pilot.csv", data$participant[1])
+ # this will output  files to GDrive
+  write.csv(data, filename)
+  fulldata <- rbind(fulldata,data)
+}
+
+```
+
+
+```{r read and analyze, include=TRUE}
+
+#read in parsed data from Google Drive (behavioral parsed) to analyze behaiorals:VSR and switch costs
+workdir ="/Users/juanbalcazar/Library/CloudStorage/GoogleDrive-balc557@tamu.edu/Shared drives/VTSRewardExpectancy/data/vts_reward_mood_f23_pilot"
+filelist<- Sys.glob(file.path(workdir,"parsed_data","*.csv")) #this need to have ID columns
+fulldata <- data.frame()
+for (file in filelist) {
+  rawdata <- fread(file) 
+  data <- rawdata %>% select (participant, blocks.thisRepN, blocks.thisN, trialNum_cumul, trialNum, curr_leftStim, 
+                              curr_rightStim, alt, acc, E1, rewCond, points_trial, 
+                              points_cumul, RT, rewTrans) 
+  #RT analyses were done separately; should be
+  # in anova_data.csv in Excel
+  fulldata <- rbind(fulldata,data)
+}
+Behavioral_AnxietyDepress<- fulldata #rename for easier identification
+
+#keep only trials that are reward blocks, this will also remove the first trial for each participant
+Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$rewTrans =="NA", ] 
+
+```
+
+```{r conditions of interest}
+#previous Condition
+Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress %>% 
+  group_by(participant) %>% #important
+  mutate(prevCondition = ifelse(trialNum_cumul>0 & lag(rewCond)=="Lo", "prev Lo",
+                           ifelse(trialNum_cumul>0 & lag(rewCond)=="Hi","prev Hi",NA)))
+
+
+
+Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress %>%
+mutate (Outcome = case_when(
+  points_trial== 1 ~ "Low Correct", 
+  points_trial== 10 ~ "High Correct",
+  points_trial== 0 ~ "No Points",
+  points_trial== -5 ~ "Loss",
+  TRUE ~ as.character(NA)
+)
+)
+
+#previous Outcome
+Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress %>% 
+  group_by(participant) %>% #important
+  mutate(prevOutcome = ifelse(trialNum_cumul>0 & lag(Outcome)=="Low Correct", "Prev Low Correct",
+                           ifelse(trialNum_cumul>0 & lag(Outcome)=="High Correct","Previous High Correct",
+                                  ifelse(trialNum_cumul>0 & lag(Outcome)=="No Points","Previous No Points",
+                                         ifelse(trialNum_cumul>0 & lag(Outcome)=="Loss","Previous Loss",
+                                  NA)))))
+library(tidyr)
+Behavioral_AnxietyDepress %>% drop_na()
+
+unique(Behavioral_AnxietyDepress$points_trial)
+
+testLossProb <- filter(Behavioral_AnxietyDepress, points_trial== -5) #summary of RT
+
+```
+
+
+
+
+
+
+```{r outliers and distributions, include=TRUE}
+
+#check for RT outliers
+cleanRTdata <- filter(Behavioral_AnxietyDepress, RT>200 & acc==1 & E1==0) #summary of RT
+
+summary_RT <- cleanRTdata %>% 
+  group_by(participant) %>%
+  summarise(meanRT = mean(RT, na.rm = TRUE),
+            logRT = log10(mean(RT, na.rm = TRUE)),
+            sdRT = sd(RT, na.rm = TRUE),
+            count = n())
+summary(summary_RT)
+
+#histogram overall RT
+library(ggplot2)
+ggplot(summary_RT, aes(x=meanRT)) + 
+  geom_histogram(binwidth=50) +
+  geom_vline(aes(xintercept=mean(meanRT)),color="blue", linetype="dashed", size=1) +
+  scale_x_continuous(name="Mean RT", breaks = seq(400,1200,200)) +
+  scale_y_continuous(name = "Count", breaks = seq(0,12,1)) + theme_classic()
+
+# RT outliers
+library(rstatix)
+summary_RT %>% identify_outliers(meanRT) #1003 is an outlier but not extreme
+
+
+#exclude any outliers
+#BehavioralRich_F21_EEG_ET<- BehavioralRich_F21_EEG_ET[!BehavioralRich_F21_EEG_ET$participant =="1065", ] 
+#BehavioralRich_F21_EEG_ET<- BehavioralRich_F21_EEG_ET[!BehavioralRich_F21_EEG_ET$participant =="1097", ] 
+
+#acc outliers
+summary_ACC <- Behavioral_AnxietyDepress %>% 
+  group_by(participant) %>% 
+  summarise(ACC = mean(acc, na.rm = TRUE), asinACC = asin(sqrt((mean(acc, na.rm = TRUE)))), count=sum(n()))
+summary(summary_ACC)
+summary_ACC %>% identify_outliers(ACC)
+lowACC <- summary_ACC %>% 
+  group_by(participant) %>% 
+  filter(ACC<.68)
+
+#excludeSubjs <- append(excludeSubjs,lowACC$participant)
+#excludeSubjs <- excludeSubjs[!duplicated(excludeSubjs)]
+
+#plot accuracy 
+summary_ACC <- summary_ACC %>%
+  group_by(participant) %>% 
+  filter(ACC > .68)
+ggplot(summary_ACC, aes(x=asinACC)) + 
+  geom_histogram(binwidth=.01) + 
+  geom_vline(aes(xintercept=mean(asinACC)),color="blue", linetype="dashed", size=1) +
+  scale_x_log10(name="Asin Accuracy", breaks = seq(.8, 1.4, .05)) +
+  scale_y_continuous(name = "Count", breaks = seq(0,10,1)) + theme_classic()
+
+
+## Check for task choice distribution (letter vs. number task)
+#Task choice is calculated as letter proportion, so 0% represents 100% number task choice
+summary_task_choice <- fulldata %>%
+  group_by(participant, alt) %>% 
+  summarise(n = n()) %>% 
+  group_by(participant) %>% 
+ # filter(!participant %in% excludeSubjs) %>% 
+  summarise(lettProp = sum(n[alt=="letter"])/sum(n))
+summary(summary_task_choice)
+
+#histogram of task choice
+ggplot(summary_task_choice, aes(x=lettProp)) + 
+  geom_histogram(binwidth=.01) + 
+  geom_vline(aes(xintercept=mean(lettProp)),color="blue", linetype="dashed", size=1) +
+  scale_x_continuous(name="Letter Task Proportion", breaks = seq(.3, .7, .05)) +
+  scale_y_continuous(name = "Count", breaks = seq(0,20,2)) + 
+  theme_classic()
+
+
+#violin plot of task choice
+ggplot(summary_task_choice, aes(x="",lettProp)) + 
+  geom_violin(scale = "count") +
+  geom_boxplot(width=.1,color = "blue", fill="light gray") +
+  labs(
+    x = NULL, y = "proportion of letter task"
+  )
+
+#check for task choice outliers
+summary_task_choice %>% identify_outliers(lettProp) #none identified
+
+#exclude subjects(if any)
+#excludeSubjs <- append(excludeSubjs, c(93929,94377))
+#excludeSubjs <- excludeSubjs[!duplicated(excludeSubjs)]
+
+#summary task without outliers
+summary_task_choice %>% group_by(participant) %>%  
+  #filter(!participant %in% excludeSubjs) %>% 
+  ggplot(aes(x="",lettProp)) + 
+  scale_y_continuous(name = "Count", breaks = seq(.1,.7,.05)) +
+  geom_violin(scale = "count") +
+  geom_boxplot(width=.1,color = "blue", fill="light gray") +
+  labs(x = NULL, y = "proportion of letter task"
+  )
+
+#VSR outlier
+summary_VSR <- Behavioral_AnxietyDepress %>% 
+  group_by(participant, alt) %>% 
+  summarise(n=n()) %>% 
+  group_by(participant) %>%
+  summarise(VSR = sum(n[alt=="switch"])/sum(n))
+summary(summary_VSR) 
+
+#check for VSR outlier
+summary_VSR %>% identify_outliers(VSR)
+#no outliers reported
+```
+
+```{r analyses}
+
+#VSR by RewardTransition
+summary_VSR_RewTrans<- Behavioral_AnxietyDepress %>% group_by(participant, rewTrans, alt) %>%
+  dplyr::summarise(n=n()) %>%
+  ungroup() %>%
+  complete(participant, rewTrans, alt, fill = list(n = 0)) %>% # fill any missing cells
+  group_by(participant) %>%
+ # filter(!any(n < 3)) %>% # drop participants that have less than 5 counts in any cell
+  group_by(participant, rewTrans) %>%
+  dplyr::summarise(VSR = sum(n[alt=="switch"])/sum(n), count=sum(n))
+
+
+#pivot for jamovi
+PivotJamoviVSR <-
+  pivot_wider(
+    summary_VSR_RewTrans,
+    id_cols = participant,
+    names_from = rewTrans,
+    values_from = VSR,
+  )
+
+#write
+fwrite(PivotJamoviVSR, "/Users/juanbalcazar/Documents/GitHub/EyeTracking_and_Gaze/VTSMood_VSR_RewTrans.csv")
+
+
+#RT by PrevOutcome and Task
+
+Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$prevOutcome == "Previous Loss", ]
+
+summary_RT_AltPrevOutcome <- Behavioral_AnxietyDepress %>% 
+  group_by(participant) %>%  
+  group_by(participant, alt, prevOutcome) %>% 
+  dplyr::summarize(RT = mean(RT, na.rm = TRUE), count = n()) %>%
+  ungroup() %>%
+  complete(participant, alt, prevOutcome, fill = list(count = 0, RT = NA))
+
+#remove cases that 
+summary_RT_AltRewCond <- summary_RT_AltRewCond %>% 
+  group_by(participant) %>% filter(!any(count < 5))
+
+#remove previous loss cases, since there are too few
+summary_RT_AltPrevOutcome<- summary_RT_AltPrevOutcome[!summary_RT_AltPrevOutcome$prevOutcome == "Previous Loss", ]
+
+#summarize for jamovi
+PivotJamovi <-
+  pivot_wider(
+    summary_RT_AltPrevOutcome,
+    id_cols = participant,
+    names_from = c(alt,prevOutcome),
+    values_from = RT,
+  )
+
+fwrite(PivotJamovi, "/Users/juanbalcazar/Documents/GitHub/Anxiety Depression Pilot/Anxiety_Depress_RT_Alt_PrevOutcome.csv")
+
+
+# find means and sems for error bars
+library(Rmisc)
+library(pander)
+sum <- summarySEwithin(summary_RT_AltPrevOutcome, measurevar="RT", withinvars=c("alt","prevOutcome"), idvar="participant")
+sum %>%
+  pander(caption='Output')
+
+#graph RT with rewCond
+library(ggplot2)
+library(ggthemes)
+cbPalette <- c("firebrick4", "blue1")
+(plotH <-sum %>%  #pipe the summarized data 'sum'
+    ggplot() +
+    aes(x = rewCond, group = alt, y = RT, color = alt) +
+    geom_line(size=1) +  
+    scale_linetype_manual(values=c("solid", "solid"))+
+    geom_text(aes(y = RT, label = round(RT)), position=position_dodge(width=0.6), size = 5.5)+
+    geom_point(size=3, fill="white") +         
+    geom_errorbar(data=sum, mapping=aes(x=rewCond, ymin=RT-se, ymax=RT+se), width=0.1, size=.7, color="black", position=position_dodge(width=0.0)) +
+    scale_color_manual(values=cbPalette) +
+    theme_hc(base_size = 17, base_family = "sans", style = c("default", "darkunica")) +
+    theme(
+      axis.title.y = element_text(vjust= 1.8, size = 18),
+      axis.title.x = element_text(vjust= -0.5, face="bold.italic", size = 18),
+      axis.title = element_text(face = "bold"),
+      plot.title = element_text(color="black", size=16, face="bold.italic"),
+      axis.text=element_text(size=15, face = "bold"),
+      legend.position = c(0.9, 0.2),
+      legend.background = element_rect(fill="lightblue",
+                                       size=0.5, linetype="solid", 
+                                       colour ="darkblue"),
+      legend.title = element_text(colour="black", size=15, face="bold")) )
+plotH+ scale_y_continuous(breaks=seq(600:640*10)) #increment y-axis marker by 10
+plotH+labs(title="EEG-ET: Effect of Task: F(1,41) = 17.01, p <.001 \n Effect of Reward Condition: F(1,41) = 34.7, p <.001 \n
+           Interaction was non-significant", 
+           x="Reward Condition", y = "Reaction Time in Milliseconds") 
+
+
+
+#Gathers SE for Bar plot's error bars, VSR
+library(Rmisc)
+#we want correct SE so use summary within
+sumRewTranz_VSR <- summarySEwithin(summary_VSR_RewTrans, measurevar="VSR", withinvars=c("rewTrans"), idvar="participant")
+sumRewTranz_VSR %>%
+  pander(caption='Output')
+
+
+#library(ggplot2); theme_set(theme_bw())
+library(ggplot2)
+library(ggthemes)
+cbPalette <- c("deepskyblue", "orange","green", "red")
+plotD<- ggplot(sumRewTranz_VSR, aes(x=rewTrans, 
+                                    y=VSR, 
+                                    color=rewTrans)) + 
+  #geom_text(aes(y = VSR, label = round(VSR, 3)), color="black", position=position_dodge(width=0.9), vjust=-.8, hjust= 1.2, size=5, fontface = "bold")+
+  geom_col( aes (fill = rewTrans), color="black", width = 0.6, size = 1.5, 
+            position=position_dodge(.9)) +
+  geom_errorbar(aes(ymin=VSR-se, 
+                    ymax=VSR+se), 
+                width=.1, color ='purple', size= .7, position=position_dodge(0.9)) +
+  # ylim(.2, .5) +
+  theme_hc(base_size = 21, base_family = "sans", style = c("default", "darkunica"))+
+  theme(
+    axis.title.y = element_text(vjust= 1.8),
+    axis.text.x = element_blank(),
+    legend.position = "right",
+    plot.title = element_text(color="black", size=23, face="bold.italic"))+
+  scale_fill_manual(values=cbPalette, labels = c("Decrease", "Increase", "Remain High", "Remain Low") )+ 
+  labs (fill ="Levels of \n Reward Transition") +
+  guides(color = FALSE) 
+
+plotD + coord_cartesian(ylim=c(.2, .5)) + ggtitle("") +
+  ylab("VSR, proportion of switches vs. total") + xlab(" ") #remove x-axis text
+
+
+```
+
+GLMM, binomial family
+Syntax
+model = glmer(target ~ fixed1 + fixed2+  (1|random1) +  (1|random2), data=data)
+
+```{r linear mixed model regression, echo=FALSE}
+
+Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$prevOutcome == "Previous Loss", ]
+
+Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$participant == "1004", ] 
+
+#delete  NAS
+Behavioral_AnxietyDepress <- na.omit(Behavioral_AnxietyDepress)
+
+#VSR 
+summary_VSR_RewTrans<- Behavioral_AnxietyDepress %>% group_by(participant, rewTrans, alt, prevOutcome) %>%
+  dplyr::summarise(n=n()) %>%
+  ungroup() %>%
+  complete(participant, rewTrans, alt, fill = list(n = 0)) %>% # fill any missing cells
+  group_by(participant) %>%
+ # filter(!any(n < 3)) %>% # drop participants that have less than 5 counts in any cell
+  group_by(participant, prevOutcome) %>%
+  dplyr::summarise(VSR = sum(n[alt=="switch"])/sum(n), count=sum(n))
+
+
+ summary_VSR_RewTrans <- summary_VSR_RewTrans[complete.cases(summary_VSR_RewTrans[ , c('prevOutcome', 'VSR')]), ]             
+
+#remove previous loss and 
+
+boxplot <-
+summary_VSR_RewTrans %>% ggplot(aes(x= prevOutcome, y=VSR)) +
+                geom_boxplot() +
+                facet_grid(.~participant)
+
+
+#no test-train splitting;I do not think you need to divide the set if you are interested in the significance of a coefficient and not in prediction. 
+
+Behavioral_AnxietyDepress$altBinomial <- ifelse(Behavioral_AnxietyDepress$alt == "switch", 1, 0)
+Behavioral_AnxietyDepress
+
+library(sjlabelled)
+set_label(Behavioral_AnxietyDepress$altBinomial) <- "Probability of a Switch"
+
+#mixed effects generalized linear model, response variable binomial
+M1 <- glmer(altBinomial ~ trialNum_cumul + blocks.thisN + prevOutcome + prevCondition + rewCond + (1|participant), data = Behavioral_AnxietyDepress, family = binomial(link = "logit"), na.action = na.omit)
+summary(M1)
+
+M1
+
+#calculate ICC variance explained by the random effect
+library(performance)
+icc(M1, by_group = TRUE)
+
+
+
+#By default, plot_model() automatically exponentiates coefficients, if appropriate (e.g. for models with log or logit link). 
+#eponentiated coefficeints are the odds ratios
+library(glmmTMB)
+library(sjPlot)
+plot_model(M1, type = "re", show.values = TRUE, value.offset = .3, vline.color = "red") #plots the exponnentiated regression estimates (odds ratio)
+
+
+plot_model(M1, type = "est", vline.color = "red", show.values = TRUE, value.offset = .3)
+plot_model(M1, type = "slope")#only linear
+
+#For linear models, you can also plot standardized beta coefficients, using type = "std" or type = "std2".
+plot_model(M1, type = "std")#only linear
+
+
+plot_model(M1,type ="re", transform = "plogis", show.values = TRUE) #probaility transform for re
+
+
+ranef(M1)$participant 
+
+op <- options(digits = 4)
+ranef(M1, drop = TRUE)
+options(op)
+
+
+```
+
+```{r}
+
+summary_RT_AltRewCond <- BehavioralRich_F21_EEG_ET %>% 
+  group_by(participant) %>%  
+  group_by(participant, alt, rewCond) %>% 
+  summarize(RT = mean(RT, na.rm = TRUE), count = n()) %>%
+  ungroup() %>%
+  complete(participant, alt, rewCond, fill = list(count = 0, RT = NA))
+
+#remove 'the -1' from alt column
+summary_RT_AltRewCond<- summary_RT_AltRewCond[!summary_RT_AltRewCond$alt == "-1", ] 
+
+#remove cases that 
+summary_RT_AltRewCond <- summary_RT_AltRewCond %>% 
+  group_by(participant) %>% filter(!any(count < 5))
+
+library(Rmisc)
+library(pander)
+sum <- summarySEwithin(summary_RT_AltRewCond, measurevar="RT", withinvars=c("alt","rewCond"), idvar="participant")
+sum %>%
+  pander(caption='Output')
+
+#graph RT with rewCond
+library(ggplot2)
+library(ggthemes)
+cbPalette <- c("firebrick4", "blue1")
+(plotH <-sum %>%  #pipe the summarized data 'sum'
+    ggplot() +
+    aes(x = rewCond, group = alt, y = RT, color = alt) +
+    geom_line(size=1) +  
+    scale_linetype_manual(values=c("solid", "solid"))+
+    geom_text(aes(y = RT, label = round(RT)), position=position_dodge(width=0.6), size = 5.5)+
+    geom_point(size=3, fill="white") +         
+    geom_errorbar(data=sum, mapping=aes(x=rewCond, ymin=RT-se, ymax=RT+se), width=0.1, size=.7, color="black", position=position_dodge(width=0.0)) +
+    scale_color_manual(values=cbPalette) +
+    theme_hc(base_size = 17, base_family = "sans", style = c("default", "darkunica")) +
+    theme(
+      axis.title.y = element_text(vjust= 1.8, size = 18),
+      axis.title.x = element_text(vjust= -0.5, face="bold.italic", size = 18),
+      axis.title = element_text(face = "bold"),
+      plot.title = element_text(color="black", size=16, face="bold.italic"),
+      axis.text=element_text(size=15, face = "bold"),
+      legend.position = c(0.9, 0.2),
+      legend.background = element_rect(fill="lightblue",
+                                       size=0.5, linetype="solid", 
+                                       colour ="darkblue"),
+      legend.title = element_text(colour="black", size=15, face="bold")) )
+plotH+ scale_y_continuous(breaks=seq(600:640*10)) #increment y-axis marker by 10
+plotH+labs(title="EEG-ET: Effect of Task: F(1,41) = 17.01, p <.001 \n Effect of Reward Condition: F(1,41) = 34.7, p <.001 \n
+           Interaction was non-significant", 
+           x="Reward Condition", y = "Reaction Time in Milliseconds") 
+
+```
+
+
