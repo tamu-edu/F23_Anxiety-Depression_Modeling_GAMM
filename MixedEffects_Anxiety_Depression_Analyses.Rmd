@@ -66,16 +66,13 @@ filename=sprintf("/Users/juanbalcazar/Library/CloudStorage/GoogleDrive-balc557@t
 ```{r read and analyze, include=TRUE}
 
 #read in parsed data from Google Drive (behavioral parsed) to analyze behaiorals:VSR and switch costs
-workdir ="/Users/juanbalcazar/Library/CloudStorage/GoogleDrive-balc557@tamu.edu/Shared drives/VTSRewardExpectancy/data/vts_reward_mood_f23_pilot"
+workdir ="/Users/juanbalcazar/Library/CloudStorage/GoogleDrive-balc557@tamu.edu/Shared drives/VTSRewardExpectancy/data/vts_reward_mood_f23_pilot/"
 filelist<- Sys.glob(file.path(workdir,"parsed_data","*.csv")) #this need to have ID columns
 fulldata <- data.frame()
 for (file in filelist) {
   rawdata <- fread(file) 
-  data <- rawdata %>% select (participant, blocks.thisRepN, blocks.thisN, trialNum_cumul, trialNum, curr_leftStim, 
-                              curr_rightStim, alt, acc, E1, rewCond, points_trial, 
-                              points_cumul, RT, rewTrans) 
-  #RT analyses were done separately; should be
-  # in anova_data.csv in Excel
+  data <- rawdata %>% select (participant, blocks.thisRepN, blocks.thisN, trialNum_cumul, trialNum, curr_leftStim, curr_rightStim, alt, acc, E1, rewCond, points_trial, points_cumul, RT, rewTrans) 
+
   fulldata <- rbind(fulldata,data)
 }
 Behavioral_AnxietyDepress<- fulldata #rename for easier identification
@@ -113,17 +110,35 @@ Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress %>%
                                          ifelse(trialNum_cumul>0 & lag(Outcome)=="Loss","Previous Loss",
                                   NA)))))
 library(tidyr)
-Behavioral_AnxietyDepress %>% drop_na()
-
+#Behavioral_AnxietyDepress %>% drop_na()
 unique(Behavioral_AnxietyDepress$points_trial)
+testLossProb <- filter(Behavioral_AnxietyDepress, points_trial== -5) #summary of RT, 197 observations
 
-testLossProb <- filter(Behavioral_AnxietyDepress, points_trial== -5) #summary of RT
+```
+
+#LOAD anxieyt-depression measures
+
+```{r}
+Anxiety_Depres <- fread(file = "/Users/juanbalcazar/Documents/GitHub/F23_Anxiety Depression/prepped_VTSMoodPilot_DATA_LABELS_2024-10-04_0933.csv")
 
 ```
 
 
+#no reverse scored items on the short form STAI. therefore continue
 
+#find mean and median for state and trait scores
 
+```{r}
+#average across state
+ Anxiety_Depres$MeanState_STAI <- rowMeans (subset (Anxiety_Depres,select = c("STAI_Upset", "STAI__FeelFrightened",
+                            "STAI_FeelNervous","STAI_Feel_Jitter",
+                            "STAI_FeelConfused")), na.rm = TRUE)
+
+#average across TRAIT
+ Anxiety_Depres$MeanTrait_STAI <- rowMeans (subset (Anxiety_Depres,select = c("STAI_FeelPilingUp", "STAI_WorryTooMuch",
+                            "STAI_ThoughtsRun","STAI_KeenDisapointment",
+                            "STAI_Turmoil")), na.rm = TRUE)
+```
 
 
 ```{r outliers and distributions, include=TRUE}
