@@ -112,7 +112,8 @@ Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress %>%
 library(tidyr)
 #Behavioral_AnxietyDepress %>% drop_na()
 unique(Behavioral_AnxietyDepress$points_trial)
-testLossProb <- filter(Behavioral_AnxietyDepress, points_trial== -5) #summary of RT, 197 observations
+testLossProp <- filter(Behavioral_AnxietyDepress, points_trial== -5) #dataset
+#for only losses
 
 ```
 
@@ -138,6 +139,136 @@ Anxiety_Depres <- fread(file = "/Users/juanbalcazar/Documents/GitHub/F23_Anxiety
  Anxiety_Depres$MeanTrait_STAI <- rowMeans (subset (Anxiety_Depres,select = c("STAI_FeelPilingUp", "STAI_WorryTooMuch",
                             "STAI_ThoughtsRun","STAI_KeenDisapointment",
                             "STAI_Turmoil")), na.rm = TRUE)
+```
+
+#median split into low anxiety and high anxiety
+#the median is 2 from summary(Anxiety_Depres$MeanTrait_STAI)
+```{r}
+Anxiety_Depres <- Anxiety_Depres %>%
+mutate (AnxietyGrp = case_when(
+  MeanTrait_STAI > 2.00 ~ "High Anxiety", 
+  MeanTrait_STAI < 2.00 ~ "Low Anxiety",
+  TRUE ~ as.character(NA)
+)
+)
+```
+# use the normative mean of 50 for PROMIS depression
+```{r}
+Anxiety_Depres <- Anxiety_Depres %>%
+mutate (DepresGroup = case_when(
+  `T-score` > 50.0 ~ "High Depression", 
+  `T-score` < 50.0 ~ "Low Depression",
+  TRUE ~ as.character(NA)
+)
+)
+
+#select only the columns we need so that combining is faster
+Anxiety_Depres <- Anxiety_Depres %>%
+  select(`Participant ID`,`T-score`,`Standard Error`, `Complete?`, MeanTrait_STAI, AnxietyGrp, DepresGroup )
+
+#rename columns for clarity
+new_names <- c("participant", "Depress_TScore", "Depress_SE", "Complete", "MeanTrait_STAI", "AnxietyGrp",
+               "DepressGrp")
+
+names(Anxiety_Depres) <- new_names
+```
+
+#combine anxiety,depression measures with behavior via ID
+```{r}
+#integrate rich behav data with anxiety and depression
+Behavioral_AnxietyDepress$participant <- as.character(Behavioral_AnxietyDepress$participant) #as character 
+Anxiety_Depres$participant <- as.character(Anxiety_Depres$participant) # as character
+conjoinedBehav_AnxDepres <- left_join(Behavioral_AnxietyDepress, Anxiety_Depres,
+                          by = c("participant"))
+
+```
+
+
+```{r VSR by reward transition, echo=FALSE}
+Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$prevOutcome == "Previous Loss", ]
+
+#Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$participant == "1004", ] 
+#delete  NAS
+Behavioral_AnxietyDepress <- na.omit(Behavioral_AnxietyDepress)
+
+#VSR 
+summary_VSR_RewTrans<- Behavioral_AnxietyDepress %>% group_by(participant, rewTrans, alt, prevOutcome) %>%
+  dplyr::summarise(n=n()) %>%
+  ungroup() %>%
+  complete(participant, rewTrans, alt, fill = list(n = 0)) %>% # fill any missing cells
+  group_by(participant) %>%
+ # filter(!any(n < 3)) %>% # drop participants that have less than 5 counts in any cell
+  group_by(participant, prevOutcome) %>%
+  dplyr::summarise(VSR = sum(n[alt=="switch"])/sum(n), count=sum(n))
+
+
+ summary_VSR_RewTrans <- summary_VSR_RewTrans[complete.cases(summary_VSR_RewTrans[ , c('prevOutcome', 'VSR')]), ]             
+
+#remove previous loss and 
+
+boxplot <-
+summary_VSR_RewTrans %>% ggplot(aes(x= prevOutcome, y=VSR)) +
+                geom_boxplot() +
+                facet_grid(.~participant)
+```
+
+GLMM, binomial family
+Syntax
+model = glmer(target ~ fixed1 + fixed2+  (1|random1) +  (1|random2), data=data)
+
+```{r linear mixed model regression, echo=FALSE}
+#no test-train splitting;I do not think you need to divide the set if you are interested in the significance of a coefficient and not in prediction. 
+
+conjoinedBehav_AnxDepres$altBinomial <- ifelse(conjoinedBehav_AnxDepres$alt == "switch", 1, 0)
+conjoinedBehav_AnxDepres
+
+library(sjlabelled)
+set_label(conjoinedBehav_AnxDepres$altBinomial) <- "Probability of a Switch"
+
+#mixed effects generalized linear model, response variable binomial
+M1 <- glmer(altBinomial ~ blocks.thisN + AnxietyGrp + DepressGrp + prevOutcome + prevCondition + rewCond + (1|participant), data = conjoinedBehav_AnxDepres, family = binomial(link = "logit"), na.action = na.omit)
+summary(M1)
+
+M1
+
+#calculate ICC variance explained by the random effect
+library(performance)
+icc(M1, by_group = TRUE)
+```
+
+#Plot random efects
+
+```{r random effects, echo=FALSE}
+#By default, plot_model() automatically exponentiates coefficients, if appropriate (e.g. for models with log or logit link). 
+#eponentiated coefficeints are the odds ratios
+library(glmmTMB)
+library(sjPlot)
+plot_model(M1, type = "re", show.values = FALSE, value.offset = 2, vline.color = "red") #plots the exponnentiated regression estimates (odds ratio)
+
+#probability transform
+plot_model(M1,type ="re", transform = "plogis", show.values = FALSE) #probaility transform for re
+```
+
+#plot fixed effects
+```{r fixed effects, echo=FALSE}
+plot_model(M1, type = "est", transform = "plogis", vline.color = "red", show.values = TRUE, value.offset = .3)
+```
+
+#only linear
+```{r linear, echo=FALSE}
+plot_model(M1, type = "slope")#only linear
+#For linear models, you can also plot standardized beta coefficients, using type = "std" or type = "std2".
+plot_model(M1, type = "std")#only linear
+
+
+
+ranef(M1)$participant 
+
+op <- options(digits = 4)
+ranef(M1, drop = TRUE)
+options(op)
+
+
 ```
 
 
@@ -385,85 +516,6 @@ plotD + coord_cartesian(ylim=c(.2, .5)) + ggtitle("") +
 
 ```
 
-GLMM, binomial family
-Syntax
-model = glmer(target ~ fixed1 + fixed2+  (1|random1) +  (1|random2), data=data)
-
-```{r linear mixed model regression, echo=FALSE}
-
-Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$prevOutcome == "Previous Loss", ]
-
-Behavioral_AnxietyDepress<- Behavioral_AnxietyDepress[!Behavioral_AnxietyDepress$participant == "1004", ] 
-
-#delete  NAS
-Behavioral_AnxietyDepress <- na.omit(Behavioral_AnxietyDepress)
-
-#VSR 
-summary_VSR_RewTrans<- Behavioral_AnxietyDepress %>% group_by(participant, rewTrans, alt, prevOutcome) %>%
-  dplyr::summarise(n=n()) %>%
-  ungroup() %>%
-  complete(participant, rewTrans, alt, fill = list(n = 0)) %>% # fill any missing cells
-  group_by(participant) %>%
- # filter(!any(n < 3)) %>% # drop participants that have less than 5 counts in any cell
-  group_by(participant, prevOutcome) %>%
-  dplyr::summarise(VSR = sum(n[alt=="switch"])/sum(n), count=sum(n))
-
-
- summary_VSR_RewTrans <- summary_VSR_RewTrans[complete.cases(summary_VSR_RewTrans[ , c('prevOutcome', 'VSR')]), ]             
-
-#remove previous loss and 
-
-boxplot <-
-summary_VSR_RewTrans %>% ggplot(aes(x= prevOutcome, y=VSR)) +
-                geom_boxplot() +
-                facet_grid(.~participant)
-
-
-#no test-train splitting;I do not think you need to divide the set if you are interested in the significance of a coefficient and not in prediction. 
-
-Behavioral_AnxietyDepress$altBinomial <- ifelse(Behavioral_AnxietyDepress$alt == "switch", 1, 0)
-Behavioral_AnxietyDepress
-
-library(sjlabelled)
-set_label(Behavioral_AnxietyDepress$altBinomial) <- "Probability of a Switch"
-
-#mixed effects generalized linear model, response variable binomial
-M1 <- glmer(altBinomial ~ trialNum_cumul + blocks.thisN + prevOutcome + prevCondition + rewCond + (1|participant), data = Behavioral_AnxietyDepress, family = binomial(link = "logit"), na.action = na.omit)
-summary(M1)
-
-M1
-
-#calculate ICC variance explained by the random effect
-library(performance)
-icc(M1, by_group = TRUE)
-
-
-
-#By default, plot_model() automatically exponentiates coefficients, if appropriate (e.g. for models with log or logit link). 
-#eponentiated coefficeints are the odds ratios
-library(glmmTMB)
-library(sjPlot)
-plot_model(M1, type = "re", show.values = TRUE, value.offset = .3, vline.color = "red") #plots the exponnentiated regression estimates (odds ratio)
-
-
-plot_model(M1, type = "est", vline.color = "red", show.values = TRUE, value.offset = .3)
-plot_model(M1, type = "slope")#only linear
-
-#For linear models, you can also plot standardized beta coefficients, using type = "std" or type = "std2".
-plot_model(M1, type = "std")#only linear
-
-
-plot_model(M1,type ="re", transform = "plogis", show.values = TRUE) #probaility transform for re
-
-
-ranef(M1)$participant 
-
-op <- options(digits = 4)
-ranef(M1, drop = TRUE)
-options(op)
-
-
-```
 
 ```{r}
 
