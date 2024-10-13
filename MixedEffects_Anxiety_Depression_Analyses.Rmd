@@ -21,6 +21,7 @@ library(ez)
 library(pander)
 library(knitr)
 library(lme4)
+library(sjPlot)
 ```
 
 
@@ -152,6 +153,8 @@ mutate (AnxietyGrp = case_when(
 )
 )
 ```
+
+
 # use the normative mean of 50 for PROMIS depression
 ```{r}
 Anxiety_Depres <- Anxiety_Depres %>%
@@ -161,25 +164,61 @@ mutate (DepresGroup = case_when(
   TRUE ~ as.character(NA)
 )
 )
+```
 
+#mean center anxiety
+Mean centering is preferred when showing interactions
+```{r}
+Anxiety_Depres$meanCenterTraitAnx <- 
+  scale(Anxiety_Depres$MeanTrait_STAI, center = TRUE, scale = FALSE)
+
+```
+
+
+```{r}
 #select only the columns we need so that combining is faster
 Anxiety_Depres <- Anxiety_Depres %>%
-  select(`Participant ID`,`T-score`,`Standard Error`, `Complete?`, MeanTrait_STAI, AnxietyGrp, DepresGroup )
+  select(`Participant ID`,`T-score`,`Standard Error`, `Complete?`, MeanTrait_STAI, 
+         AnxietyGrp, DepresGroup, meanCenterTraitAnx)
 
 #rename columns for clarity
 new_names <- c("participant", "Depress_TScore", "Depress_SE", "Complete", "MeanTrait_STAI", "AnxietyGrp",
-               "DepressGrp")
+               "DepressGrp", "meanCenterTraitAnx")
 
 names(Anxiety_Depres) <- new_names
+```
+
+
+```{r prepping the data}
+library(dplyr)
+sapply(Anxiety_Depres, function(x) sum(is.na(x)))
+#remove 11 Anxiety NAs
+Anxiety_Depres <- Anxiety_Depres[!is.na(Anxiety_Depres$AnxietyGrp),]
+
+sapply(Behavioral_AnxietyDepress, function(x) sum(is.na(x)))
+#remove an empty participant
+Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress[!is.na(Behavioral_AnxietyDepress$participant),]
+Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress[!is.na(Behavioral_AnxietyDepress$prevCondition),]
+Behavioral_AnxietyDepress <- Behavioral_AnxietyDepress[!is.na(Behavioral_AnxietyDepress$prevOutcome),]
+
+#remove Nas 
+
+
 ```
 
 #combine anxiety,depression measures with behavior via ID
 ```{r}
 #integrate rich behav data with anxiety and depression
-Behavioral_AnxietyDepress$participant <- as.character(Behavioral_AnxietyDepress$participant) #as character 
+Behavioral_AnxietyDepress$participant <- as.character(Behavioral_AnxietyDepress$participant) #as character
 Anxiety_Depres$participant <- as.character(Anxiety_Depres$participant) # as character
 conjoinedBehav_AnxDepres <- left_join(Behavioral_AnxietyDepress, Anxiety_Depres,
                           by = c("participant"))
+
+sapply(conjoinedBehav_AnxDepres, function(x) sum(is.na(x)))
+
+#remove NAs that are caused when joining anxiety/depression scores to an ID that does not exist
+conjoinedBehav_AnxDepres <-
+conjoinedBehav_AnxDepres[!is.na(conjoinedBehav_AnxDepres$AnxietyGrp),]
 
 ```
 
@@ -212,9 +251,8 @@ summary_VSR_RewTrans %>% ggplot(aes(x= prevOutcome, y=VSR)) +
                 facet_grid(.~participant)
 ```
 
-GLMM, binomial family
-Syntax
-model = glmer(target ~ fixed1 + fixed2+  (1|random1) +  (1|random2), data=data)
+
+Prep variables
 
 ```{r linear mixed model regression, echo=FALSE}
 #no test-train splitting;I do not think you need to divide the set if you are interested in the significance of a coefficient and not in prediction. 
@@ -225,16 +263,97 @@ conjoinedBehav_AnxDepres
 library(sjlabelled)
 set_label(conjoinedBehav_AnxDepres$altBinomial) <- "Probability of a Switch"
 
+#factor your categorical variables
+conjoinedBehav_AnxDepres$blocks.thisN = as.factor(conjoinedBehav_AnxDepres$blocks.thisN) 
+conjoinedBehav_AnxDepres$AnxietyGrp = as.factor(conjoinedBehav_AnxDepres$AnxietyGrp)
+conjoinedBehav_AnxDepres$DepressGrp = as.factor(conjoinedBehav_AnxDepres$DepressGrp)
+conjoinedBehav_AnxDepres$prevOutcome = as.factor(conjoinedBehav_AnxDepres$prevOutcome)
+conjoinedBehav_AnxDepres$prevCondition = as.factor(conjoinedBehav_AnxDepres$prevCondition)
+conjoinedBehav_AnxDepres$rewCond = as.factor(conjoinedBehav_AnxDepres$rewCond)
+conjoinedBehav_AnxDepres$participant = as.factor(conjoinedBehav_AnxDepres$participant)
+```
+
+#relevel
+```{r}
+
+conjoinedBehav_AnxDepres = conjoinedBehav_AnxDepres %>% 
+  mutate(AnxietyGrp = relevel(AnxietyGrp, 1))
+conjoinedBehav_AnxDepres = conjoinedBehav_AnxDepres %>% 
+  mutate(DepressGrp = relevel(DepressGrp, 2))
+```
+
+Check the structure of the dataset
+```{r}
+#reduce to columns of interest
+conjoinedBehav_AnxDepres <- conjoinedBehav_AnxDepres %>%
+  select(altBinomial, participant, blocks.thisN , AnxietyGrp, DepressGrp, prevOutcome,
+         prevCondition, rewCond, meanCenterTraitAnx, Depress_TScore)
+
+#checck structure of data
+str(conjoinedBehav_AnxDepres)
+xtabs(~altBinomial + AnxietyGrp, data = conjoinedBehav_AnxDepres )
+xtabs(~altBinomial + DepressGrp, data = conjoinedBehav_AnxDepres )
+
+```
+
+
+
+```{r}
+library(flexplot)
+flexplot(altBinomial~ Depress_TScore | meanCenterTraitAnx, data = conjoinedBehav_AnxDepres,
+         method = "logistic", ghost.line = "grey", SE = TRUE, ghost.reference = )
+```
+GLMM, binomial family
+Syntax
+model = glmer(target ~ fixed1 + fixed2+  (1|random1) +  (1|random2), data=data)
+
+#you will get as many n-1 coefficients as you have levels for that variable
+#the first level of that variable is treated as the 'reference'
+#the log odds of switching increase/decrease by ____(estimate) as we go from the reference
+#to that level
+
+#I removed blocks and it now converges well
+```{r linear mixed model regression, echo=FALSE}
 #mixed effects generalized linear model, response variable binomial
-M1 <- glmer(altBinomial ~ blocks.thisN + AnxietyGrp + DepressGrp + prevOutcome + prevCondition + rewCond + (1|participant), data = conjoinedBehav_AnxDepres, family = binomial(link = "logit"), na.action = na.omit)
+M1 <- glmer(altBinomial ~  AnxietyGrp + prevOutcome * DepressGrp + prevCondition + rewCond 
+            + (1|participant), data = conjoinedBehav_AnxDepres, family = binomial(link = "logit"), na.action = na.omit)
 summary(M1)
 
-M1
+```
 
+#table
+```{r}
+tab_model(M1)
+```
+
+```{r}
+car::vif(M1) #values above 5 suggest multicollinearity
+```
+
+```{r}
+
+```
+
+
+```{r ICC variance, random effect, echo=FALSE}
 #calculate ICC variance explained by the random effect
 library(performance)
 icc(M1, by_group = TRUE)
 ```
+
+To interpet a negative odds ratio, simply take 1 dvidied by odds ratio and then 
+interpret as "less likely to switch"
+#list of exponentiated coefficients (i.e. odds ratios)
+```{r}
+Coeff <-
+coef(M1)
+
+#Odds ratios and confidence intervals for odds ratios
+exp(cbind(AnxietyGrp=coef(M1)))
+
+exp(Coeff)
+```
+
 
 #Plot random efects
 
@@ -243,25 +362,42 @@ icc(M1, by_group = TRUE)
 #eponentiated coefficeints are the odds ratios
 library(glmmTMB)
 library(sjPlot)
-plot_model(M1, type = "re", show.values = FALSE, value.offset = 2, vline.color = "red") #plots the exponnentiated regression estimates (odds ratio)
+plot_model(M1, type = "re", show.values = FALSE, value.offset = 2, vline.color = "black") #plots the exponnentiated regression estimates (odds ratio)
 
 #probability transform
-plot_model(M1,type ="re", transform = "plogis", show.values = FALSE) #probaility transform for re
+plot_model(M1,type ="re", transform = "plogis", show.values = FALSE,
+           vline.color = "black") #probaility transform for re
 ```
 
-#plot fixed effects
-```{r fixed effects, echo=FALSE}
-plot_model(M1, type = "est", transform = "plogis", vline.color = "red", show.values = TRUE, value.offset = .3)
+#plot Probabilities fixed effects
+#plogis = transformed to probability
+To plot only certain coefficients: # remove coefficients sex2, dep2 and dep3
+plot_model(m1, rm.terms = c("sex2", "dep2", "dep3"))
+
+#if this plot is too complicated, remove the interaction term
+
+```{r probabilities for fixed effects, echo=FALSE}
+plot_model(M1, type = "est", transform = "plogis", vline.color = "red", show.values = TRUE, value.offset = 0.40,value.size = 2.5, sort.est = TRUE)
 ```
 
-#only linear
+univariate probabilities
+Predicted values (marginal effects) for specific model terms. 
 ```{r linear, echo=FALSE}
-plot_model(M1, type = "slope")#only linear
-#For linear models, you can also plot standardized beta coefficients, using type = "std" or type = "std2".
-plot_model(M1, type = "std")#only linear
+#specify which terms to plot, predicted values(marginal effects)
+plot_model(M1, type = "pred", terms = c("prevCondition"))
+plot_model(M1, type = "pred", terms = c("prevOutcome"))
+plot_model(M1, type = "pred", terms = c("blocks.thisN"))
+plot_model(M1, type = "pred", terms = c("DepressGrp"))
+plot_model(M1, type = "pred", terms = c("DepressGrp", "prevOutcome"))
+plot_model(M1, type = "pred", terms = c("AnxietyGrp", "prevOutcome"))
+
+plot_model (M1, type = "int") #automatic plotting of interaction model terms
+
+plot_model(M1, type = "diag")#diagnostic, For generalized linear mixed models, returns the QQ-plot for random effects
+```
 
 
-
+```{r linear, echo=FALSE}
 ranef(M1)$participant 
 
 op <- options(digits = 4)
